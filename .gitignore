@@ -1,0 +1,20 @@
+# Python venv
+airflow-env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Airflow
+logs/
+*.log
+
+# IDE & System
+.vscode/
+.idea/
+.DS_Store
+
+# 환경설정
+.env
+
+application-secret.yml
+application-local.yml
