@@ -1,7 +1,8 @@
 # dags/user_summary_dag.py
 
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
+# from airflow.providers.standard.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
@@ -9,7 +10,7 @@ import re
 
 from dotenv import load_dotenv
 import os
-# 반드시 명시적으로 상위 경로의 .env 지정
+
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path)
 
@@ -37,8 +38,7 @@ def summarize_user_actions():
             password=os.getenv("DB_PASSWORD")
         )
         cursor = conn.cursor()
-        summary_date = date.today()
-        # summary_date = date.today() - timedelta(days=1)
+        summary_date = date.today() - timedelta(days=1)
 
         cursor.execute("""
             SELECT user_id, action_type, screen, metadata, create_at
@@ -123,78 +123,82 @@ def summarize_event_actions():
     from collections import defaultdict
     from datetime import date
 
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
-    cursor = conn.cursor()
-    summary_date = date.today()
-    # summary_date = date.today() - timedelta(days=1)
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        cursor = conn.cursor()
+        summary_date = date.today() - timedelta(days=1)
 
-    # EVENT 참여/완료/이탈 집계용
-    summary = defaultdict(lambda: {"user_set": set(), "count": 0})
+        # EVENT 참여/완료/이탈 집계용
+        summary = defaultdict(lambda: {"user_set": set(), "count": 0})
 
-    # 참여 + 유저 메타 정보
-    cursor.execute("""
-        SELECT rr.user_id,
-            rr.unear_event_id,
-            rr.reward IS NOT NULL AS completed,
-            CASE 
-                WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 20 THEN '10s'
-                WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 30 THEN '20s'
-                WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 40 THEN '30s'
-                WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 50 THEN '40s'
-                ELSE '50s+'
-            END AS age_group,
-            u.gender
-        FROM roulette_results rr
-        JOIN users u ON rr.user_id = u.user_id
-        WHERE rr.participated = true
-        AND u.birthdate IS NOT NULL
-        AND u.gender IS NOT NULL
-    """)
-    for user_id, event_id, completed, age_group, gender in cursor.fetchall():
-        group = f"{age_group}_{gender}"
-        summary_key = ("EVENT_JOIN", group, "age_gender")
-        summary[summary_key]["user_set"].add(user_id)
-        summary[summary_key]["count"] += 1
-
-        if completed:
-            done_key    = ("EVENT_DONE", group, "age_gender")
-            summary[done_key]["user_set"].add(user_id)
-            summary[done_key]["count"] += 1
-        else:
-            drop_key    = ("EVENT_DROP", group, "age_gender")
-            summary[drop_key]["user_set"].add(user_id)
-            summary[drop_key]["count"] += 1
-
-    # 결과 저장
-    for (action_type, group_by_field, group_by_text), data in summary.items():
-        distinct_user_count = len(data["user_set"])
-        count = data["count"]
+        # 참여 + 유저 메타 정보
         cursor.execute("""
-            INSERT INTO user_action_summary (
+            SELECT rr.user_id,
+                rr.unear_event_id,
+                rr.reward IS NOT NULL AS completed,
+                CASE 
+                    WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 20 THEN '10s'
+                    WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 30 THEN '20s'
+                    WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 40 THEN '30s'
+                    WHEN EXTRACT(YEAR FROM AGE(current_date, u.birthdate)) < 50 THEN '40s'
+                    ELSE '50s+'
+                END AS age_group,
+                u.gender
+            FROM roulette_results rr
+            JOIN users u ON rr.user_id = u.user_id
+            WHERE rr.participated = true
+            AND u.birthdate IS NOT NULL
+            AND u.gender IS NOT NULL
+        """)
+        for user_id, event_id, completed, age_group, gender in cursor.fetchall():
+            group = f"{age_group}_{gender}"
+            summary_key = ("EVENT_JOIN", group, "age_gender")
+            summary[summary_key]["user_set"].add(user_id)
+            summary[summary_key]["count"] += 1
+
+            if completed:
+                done_key    = ("EVENT_DONE", group, "age_gender")
+                summary[done_key]["user_set"].add(user_id)
+                summary[done_key]["count"] += 1
+            else:
+                drop_key    = ("EVENT_DROP", group, "age_gender")
+                summary[drop_key]["user_set"].add(user_id)
+                summary[drop_key]["count"] += 1
+
+        # 결과 저장
+        for (action_type, group_by_field, group_by_text), data in summary.items():
+            distinct_user_count = len(data["user_set"])
+            count = data["count"]
+            cursor.execute("""
+                INSERT INTO user_action_summary (
+                    action_type, group_by_field, group_by_text,
+                    distinct_user_count, count, summary_date
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (action_type, group_by_field, group_by_text, summary_date)
+                DO UPDATE SET
+                    distinct_user_count = EXCLUDED.distinct_user_count,
+                    count = EXCLUDED.count
+            """, (
                 action_type, group_by_field, group_by_text,
                 distinct_user_count, count, summary_date
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (action_type, group_by_field, group_by_text, summary_date)
-            DO UPDATE SET
-                distinct_user_count = EXCLUDED.distinct_user_count,
-                count = EXCLUDED.count
-        """, (
-            action_type, group_by_field, group_by_text,
-            distinct_user_count, count, summary_date
-        ))
+            ))
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] summarize_event_actions failed: {e}")
+        raise
+    
 
-
+# 인기 이벤트 장소 요약
 def summarize_event_place_popularity():
     import psycopg2
     from collections import defaultdict
@@ -212,7 +216,7 @@ def summarize_event_place_popularity():
             password=os.getenv("DB_PASSWORD")
         )
         cursor = conn.cursor()
-        summary_date = date.today()
+        summary_date = date.today() - timedelta(days=1)
 
         # 1. 클릭 집계
         cursor.execute("""
@@ -309,7 +313,7 @@ def summarize_event_place_popularity():
         print(f"[INFO] 이벤트 매장 {len(all_place_names)}곳 인기 순위 저장 완료.")
 
     except Exception as e:
-        print(f"[ERROR] 이벤트 인기 요약 실패: {e}")
+        print(f"[ERROR] summarize_event_place_popularity failed: {e}")
         raise
 
 
@@ -321,12 +325,15 @@ default_args = {
     'retry_delay': timedelta(minutes=5)
 }
 
+from pendulum import datetime, timezone
+kst = timezone("Asia/Seoul")
+
 # DAG 정의
 with DAG(
     dag_id='user_action_summary_dag',
     default_args=default_args,
     schedule='0 2 * * *',  # 매일 새벽 2시
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2025, 1, 1, tz=kst),
     catchup=False
 ) as dag:
 

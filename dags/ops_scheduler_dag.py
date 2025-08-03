@@ -1,7 +1,8 @@
 # 요약이 아닌 스케줄러 작업용 dag
 
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
+# from airflow.providers.standard.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
@@ -9,7 +10,7 @@ import re
 
 from dotenv import load_dotenv
 import os
-# 반드시 명시적으로 상위 경로의 .env 지정
+
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path)
 
@@ -49,11 +50,14 @@ default_args = {
     'retry_delay': timedelta(minutes=5)
 }
 
+from pendulum import datetime, timezone
+kst = timezone("Asia/Seoul")
+
 with DAG(
     dag_id='ops_scheduler_dag',
     default_args=default_args,
     schedule='0 1 1 * *',  # 매월 1일 01:00
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2025, 1, 1, tz=kst),
     catchup=False
 ) as dag:
     update_coupon_task = PythonOperator(
