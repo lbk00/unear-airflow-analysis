@@ -18,26 +18,24 @@ load_dotenv(dotenv_path)
 # 매월 1일 새벽 1시 쿠폰 템플릿 사용기간 업데이트 (선착순 쿠폰 제외)
 def update_coupon_template_dates():
     try:
-        conn = psycopg2.connect(
-                host=os.getenv("DB_HOST"),
-                port=os.getenv("DB_PORT"),
-                dbname=os.getenv("DB_NAME"),
-                user=os.getenv("DB_USER"),
-                password=os.getenv("DB_PASSWORD")
-            )
-        cur = conn.cursor()
+        with psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE coupon_templates
+                    SET
+                        coupon_start = date_trunc('month', current_date),
+                        coupon_end = date_trunc('month', current_date + interval '1 month')
+                    WHERE
+                        discount_code != 'COUPON_FCFS'
+                """)
+            conn.commit()
 
-        cur.execute("""
-            UPDATE coupon_templates
-            SET
-                coupon_start = date_trunc('month', current_date),
-                coupon_end = date_trunc('month', current_date + interval '1 month')
-            WHERE
-                discount_code != 'COUPON_FCFS'
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
     except Exception as e:
         print(f"[ERROR] update_coupon_template_dates failed: {e}")
         raise
