@@ -48,7 +48,7 @@ def get_age_group(birthdate):
     else:
         return "60s+"
 
-def load_persona_embeddings():
+def load_persona_embeddings(model="text-embedding-3-small", prefix="사용자 페르소나 설명: "):
     """페르소나 설명을 임베딩으로 변환"""
     conn = get_db_connection()
     try:
@@ -58,20 +58,30 @@ def load_persona_embeddings():
         """, conn)
         
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        
         persona_embeddings = {}
+        
         for _, persona in personas_df.iterrows():
-            response = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=persona['description']
-            )
+            embedding_input = f"{prefix}{persona['description']}"
+            
+            for attempt in range(3):
+                try:
+                    response = client.embeddings.create(
+                        model=model,
+                        input=embedding_input
+                    )
+                    break
+                except Exception as e:
+                    print(f"[ERROR] Failed embedding {persona['name']} (attempt {attempt+1}): {e}")
+                    time.sleep(1)
+            else:
+                continue  # 3회 실패 시 skip
+            
             persona_embeddings[persona['payment_type_tag_id']] = {
                 'name': persona['name'],
                 'embedding': response.data[0].embedding
             }
-        
+
         return persona_embeddings
-        
     finally:
         conn.close()
 
@@ -112,8 +122,8 @@ def validate_prerequisites(**context):
 def load_base_data(**context):
     """기초 데이터 로드 및 검증 (테스트 모드)"""
     
-    # 🎯 테스트할 유저 ID들 (여기서 수정!)
-    TEST_USER_IDS = [185, 186, 187, 188, 189, 190, 10300, 191]
+    # 테스트할 유저 ID들 (여기서 수정!)
+    TEST_USER_IDS = [10000]
     
     conn = get_db_connection()
     try:
@@ -363,160 +373,122 @@ def get_default_message(persona_name):
 
 def generate_personalized_message_with_llm(persona_name, age_group, gender, category_scores, total_amount, user_payments=None):
     """LLM으로 개인화된 격려 메시지 생성 (강화 버전)"""
-    
-    print(f"🤖 LLM 메시지 생성 시작 - 페르소나: {persona_name}, 연령대: {age_group}, 성별: {gender}")
-    
+
+    print(f"🤖 LLM 메시지 생성 시작 - 페르소나: {persona_name}, 연별대: {age_group}, 성별: {gender}")
+
     try:
-        # OpenAI API 키 확인
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             print("❌ OPENAI_API_KEY 환경변수가 설정되지 않음")
             return get_default_message(persona_name)
-        
+
         print(f"✅ OpenAI API 키 확인됨 (길이: {len(api_key)})")
-        
-        # 기본 소비 패턴
+
         consumption_pattern = ""
         if category_scores and total_amount > 0:
             top_category = max(category_scores.keys(), key=category_scores.get)
             top_ratio = (category_scores[top_category] / total_amount * 100)
-            
+
             category_korean = {
                 "CAFE": "카페",
-                "BAKERY": "베이커리", 
+                "BAKERY": "밥집",
                 "FOOD": "음식점",
-                "SHOPPING": "쇼핑",
+                "SHOPPING": "상점",
                 "BEAUTY": "뷰티",
-                "ACTIVITY": "액티비티",
-                "LIFE": "생활용품",
-                "CULTURE": "문화"
+                "ACTIVITY": "애티비티",
+                "LIFE": "해당 사항",
+                "CULTURE": "민민한 문화"
             }
-            
+
             main_category = category_korean.get(top_category, top_category)
             consumption_pattern = f"{main_category} 소비 중심"
             print(f"📊 주요 소비 패턴: {main_category} ({top_ratio:.1f}%)")
-        
-        # 세밀한 행동 패턴 분석
+
         behavior_profile = analyze_user_behavior_profile(user_payments) if user_payments is not None else {}
-        
-        # 행동 특성 텍스트 생성
-        behavior_traits = []
-        
+
+        trait_descriptions = []
         if behavior_profile.get('discount_seeker'):
-            behavior_traits.append(behavior_profile['discount_seeker'])
-        
-        if behavior_profile.get('time_preference'):
-            behavior_traits.append(behavior_profile['time_preference'])
-            
-        if behavior_profile.get('spending_style'):
-            behavior_traits.append(behavior_profile['spending_style'])
-            
-        if behavior_profile.get('coupon_usage_rate', 0) > 0.7:
-            behavior_traits.append('쿠폰활용형')
-            
-        if behavior_profile.get('membership_level') in ['VIP', 'VVIP']:
-            behavior_traits.append('프리미엄멤버')
-        
-        behavior_text = ", ".join(behavior_traits[:3])  # 최대 3개까지
-        print(f"🎯 행동 특성: {behavior_text}")
-        print(f"🔍 기본 메시지 확인: {get_default_message(persona_name)}")
-        
-        # LLM 프롬프트 (대폭 강화 버전)
+            trait_descriptions.append("할인보다는 만족을 중요하게 생각하는")
+        if behavior_profile.get('time_preference') == '야행성':
+            trait_descriptions.append("밤 시간대에 소비가 집중되는")
+        if behavior_profile.get('spending_style') == '적당형':
+            trait_descriptions.append("균형 잡힌 소비 성향을 보이는")
+
+        behavior_text = " / ".join(trait_descriptions[:3]) or "뚜렷한 소비 성향 정보 없음"
+
+        print(f"🎯 행동 특성 내용: {behavior_text}")
+        print(f"🔍 기본 메시지: {get_default_message(persona_name)}")
+
+        # 최근 결제 이력 요약 추가 (최대 3개)
+        payment_summaries = []
+        if user_payments is not None:
+            recent_payments = user_payments.sort_values(by='paid_at', ascending=False).head(3)
+            for _, row in recent_payments.iterrows():
+                date_str = pd.to_datetime(row['paid_at']).strftime('%m/%d')
+                payment_summaries.append(f"- {row['place_category']} {int(row['total_payment_amount'])}원 ({date_str})")
+        payment_summary_text = "\n".join(payment_summaries)
+
         prompt = f"""
-다음 정보를 바탕으로 사용자에게 보여줄 따뜻하고 격려하는 한 줄 메시지를 만들어주세요.
+다음은 사용자 분석 결과입니다. 이 정보를 참고하여 따뜻하고 감성적인 한 줄 메시지를 생성해주세요.
 
 페르소나: {persona_name}
 연령대: {age_group}
 성별: {gender}
 주요소비: {consumption_pattern}
-행동특성: {behavior_text}
+행동 특성: {behavior_text}
+
+최근 결제 이력:
+{payment_summary_text}
 
 요구사항:
-1. "~을/를 좋아하는 당신" 또는 "~한 당신" 형태로 시작
-2. 행동특성을 반드시 포함시켜 개성있게 표현
-3. 따뜻하고 격려하는 톤
-4. 45자 이내
-5. 이모지 1개 포함
-6. 마케팅 문구 X, 자연스러운 칭찬/격려
-
-행동특성별 표현 가이드:
-- 할인헌터/혜택추구형 → "할인을 놓치지 않는", "혜택을 잘 찾는", "똑똑한"
-- 무던형 → "여유로운", "차분한", "자연스러운"
-- 아침형 → "아침의 여유를", "상쾌한 시작을"
-- 오후형 → "오후의 여유를", "차분한 시간을"
-- 저녁형 → "저녁을 즐기는", "밤의 감성을"
-- 야행성 → "밤을 사랑하는", "야간 활동을"
-- 가성비형 → "현명한", "알뜰한", "똑똑한"
-- 적당형 → "균형잡힌", "조화로운", "안정적인"
-- 프리미엄형 → "품격있는", "세련된", "고급스러운"
-- 쿠폰활용형 → "혜택을 잘 활용하는", "똑똑한"
-
-다양한 예시:
-- 할인헌터 + 카페 + 아침형: "할인 혜택을 놓치지 않는 똑똑한 아침 카페러인 당신! ☕"
-- 무던형 + 문화 + 오후형: "오후의 여유 속에서 문화를 즐기는 당신, 감성이 빛나요 🎨"
-- 혜택추구형 + 쇼핑 + 저녁형: "저녁 시간 혜택을 잘 찾는 쇼핑 고수인 당신 🛍️"
-- 가성비형 + 음식 + 야행성: "밤에 가성비 맛집을 찾는 탐험가인 당신 🌙"
-- 적당형 + 뷰티 + 오후형: "오후에 균형잡힌 뷰티를 즐기는 당신, 아름다워요 ✨"
-- 프리미엄형 + 액티비티 + 아침형: "아침부터 품격있는 액티비티를 즐기는 당신 🌟"
-- 쿠폰활용형 + 베이커리: "쿠폰으로 달콤함을 더하는 똑똑한 빵러버 🥐"
-- 무던형 + 생활용품: "차분하게 생활을 가꾸는 당신의 여유로움 🏠"
-
-반드시 행동특성(할인헌터, 무던형, 오후형, 적당형 등)을 메시지에 포함시켜 주세요!
+1. 50자 이내의 한 문장
+2. 이모지 1개 포함
+3. 마케팅 문구는 제외
+4. 사용자의 소비 성향이 드러나야 함
+5. 자연스럽고 격려하는 말투로 작성
 
 메시지만 출력해주세요:
 """
-        
+
         print(f"📝 GPT 프롬프트 준비 완료 (길이: {len(prompt)})")
-        
-        # OpenAI 클라이언트 생성 시도
+
         try:
             client = openai.OpenAI(api_key=api_key)
             print("✅ OpenAI 클라이언트 생성 성공")
         except Exception as client_error:
             print(f"❌ OpenAI 클라이언트 생성 실패: {client_error}")
             return get_default_message(persona_name)
-        
-        # API 호출
+
         print("🚀 GPT API 호출 시작...")
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.8,  # 창의성 증가
-            max_tokens=150    # 토큰 증가
+            temperature=0.8,
+            max_tokens=150
         )
-        
+
         print("✅ GPT API 호출 성공")
-        
         generated_message = response.choices[0].message.content.strip()
         print(f"✨ LLM 생성 메시지: {generated_message}")
-        print(f"📊 행동 프로필: {behavior_text}")
-        print(f"📝 두 메시지가 같은가? {generated_message == get_default_message(persona_name)}")
-        
+
         return generated_message
-        
+
     except Exception as e:
         print(f"❌ LLM 메시지 생성 실패: {e}")
-        print(f"❌ 에러 타입: {type(e).__name__}")
         import traceback
-        print(f"❌ 상세 트레이스백:")
         traceback.print_exc()
-        # 실패시 기본 메시지
         return get_default_message(persona_name)
 
 def get_recommend_message(persona_name, age_group, gender, category_scores, total_amount, user_payments=None):
-    """메인 메시지 생성 함수 (LLM 활용)"""
-    
     print(f"💬 메시지 생성 시작 - 페르소나: {persona_name}")
-    
+
     if persona_name == "신규가입자":
-        print("📝 신규가입자 기본 메시지 반환")
         return "아직 충분한 데이터가 없어 정확한 분석이 어려워요"
-    
-    # LLM으로 개인화된 메시지 생성
-    generated_message = generate_personalized_message_with_llm(persona_name, age_group, gender, category_scores, total_amount, user_payments)
-    
-    print(f"🔄 get_recommend_message 반환값: '{generated_message}'")
-    return generated_message
+
+    return generate_personalized_message_with_llm(
+        persona_name, age_group, gender,
+        category_scores, total_amount, user_payments
+    )
 
 def assign_default_persona(user):
     """결제 내역 없는 사용자 기본 페르소나 + 기본 임베딩"""
@@ -556,52 +528,53 @@ def assign_default_persona(user):
     }
 
 def analyze_payment_with_rag(user, payments, analysis_date, month_weights, persona_embeddings):
-    """RAG 기반 페르소나 매칭 + 사용자 임베딩 생성"""
-    
+    """RAG 기반 페르소나 매칭 + 사용자 임베딩 생성 (hybrid scoring 개선 포함)"""
+
     print(f"🔍 결제 분석 시작 - User {user['user_id']}")
-    
+
     # 결제 패턴 분석
     category_scores = defaultdict(float)
     total_amount = 0
-    
+
     for _, payment in payments.iterrows():
         paid_date = pd.to_datetime(payment['paid_at'])
         months_ago = (analysis_date.year - paid_date.year) * 12 + (analysis_date.month - paid_date.month)
-        
+
         if months_ago in month_weights:
             weight = month_weights[months_ago]
             amount = payment['total_payment_amount']
             category = payment['place_category']
-            
+
             category_scores[category] += amount * weight
             total_amount += amount * weight
-    
+
     print(f"💰 총 가중 결제액: {total_amount:,.0f}원")
     print(f"📊 카테고리별 점수: {dict(category_scores)}")
-    
+
     if total_amount == 0:
         print("❌ 가중 결제액이 0 - 기본 페르소나 할당")
         return assign_default_persona(user)
-    
+
     # 연령대+성별 그룹 생성
     age_group = get_age_group(user['birthdate'])
     gender = user['gender'] or 'U'
     target_group = f"{age_group}_{gender}"
-    
+
     print(f"👤 타겟 그룹: {target_group}")
-    
+
     # 동일 연령대+성별 그룹의 인기 카테고리 조회
     conn = get_db_connection()
     popular_categories = get_top3_from_summary(target_group, conn)
     conn.close()
-    
+
     print(f"🔥 인기 카테고리: {len(popular_categories)}개")
-    
+
     # 사용자 소비 패턴 텍스트 생성 (임베딩용)
     pattern_text = create_user_pattern_text(target_group, category_scores, total_amount, popular_categories)
-    
+
     print(f"📝 패턴 텍스트 생성 완료 (길이: {len(pattern_text)})")
-    
+    print(f"🧾 패턴 텍스트 내용:\n{pattern_text}")
+
     # 사용자 패턴을 임베딩으로 변환
     try:
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -615,22 +588,31 @@ def analyze_payment_with_rag(user, payments, analysis_date, month_weights, perso
     except Exception as e:
         print(f"❌ 임베딩 생성 실패: {e}")
         return assign_default_persona(user)
-    
-    # 페르소나와 유사도 계산
-    best_persona_id = None
-    best_similarity = -1
-    
+
+    # 유사도 계산 + hybrid scoring
     print(f"🎯 페르소나 매칭 시작 - {len(persona_embeddings)}개 페르소나 대상")
-    
+    similarity_scores = []
+    user_top_category = max(category_scores, key=category_scores.get)
+
     for persona_id, persona_data in persona_embeddings.items():
         similarity = cosine_similarity(user_embedding, persona_data['embedding'])
-        print(f"  - {persona_data['name']}: {similarity:.4f}")
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_persona_id = persona_id
-    
-    print(f"🏆 최적 매칭: {persona_embeddings[best_persona_id]['name']} (유사도: {best_similarity:.4f})")
-    
+        persona_categories = persona_data.get("categories", [])  # e.g., ["CAFE", "LIFE"]
+        category_bonus = 1.0 if user_top_category in persona_categories else 0.0
+        final_score = 0.7 * similarity + 0.3 * category_bonus
+
+        similarity_scores.append((persona_id, final_score, similarity))
+        print(f"  - {persona_data['name']}: similarity={similarity:.4f}, final_score={final_score:.4f}")
+
+    # 상위 후보 출력
+    top_matches = sorted(similarity_scores, key=lambda x: -x[1])[:3]
+    print("🔥 유사도 상위 후보:")
+    for pid, final, sim in top_matches:
+        print(f"   - {persona_embeddings[pid]['name']}: score={final:.4f}, raw={sim:.4f}")
+
+    # 최종 선택
+    best_persona_id, best_score, best_similarity = max(similarity_scores, key=lambda x: x[1])
+    print(f"🏆 최적 매칭: {persona_embeddings[best_persona_id]['name']} (유사도: {best_similarity:.4f}, 종합점수: {best_score:.4f})")
+
     # 메시지 생성
     recommend_message = get_recommend_message(
         persona_embeddings[best_persona_id]['name'], 
@@ -640,9 +622,9 @@ def analyze_payment_with_rag(user, payments, analysis_date, month_weights, perso
         total_amount, 
         payments
     )
-    
+
     print(f"📨 최종 생성된 메시지: '{recommend_message}'")
-    
+
     result = {
         'user_id': user['user_id'],
         'age_group': age_group,
@@ -653,12 +635,13 @@ def analyze_payment_with_rag(user, payments, analysis_date, month_weights, perso
         'vector_similarity': best_similarity,
         'user_embedding': user_embedding
     }
-    
+
     print(f"🎁 analyze_payment_with_rag 최종 반환 결과:")
     print(f"   - payment_type_tag: {result['payment_type_tag']}")
     print(f"   - recommend_message: '{result['recommend_message']}'")
-    
+
     return result
+
 
 def process_user_embeddings(**context):
     """사용자별 임베딩 생성 및 페르소나 매칭 (테스트 모드)"""
