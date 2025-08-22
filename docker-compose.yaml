@@ -1,13 +1,12 @@
-version: '3.8'
-
 x-airflow-common:
   &airflow-common
-  image: apache/airflow:2.9.1-python3.10
+  # 커스텀 이미지 사용
+  build: .
   env_file:
     - .env
   environment:
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
     AIRFLOW__CORE__LOAD_EXAMPLES: "False"
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_SECRET_KEY}
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
@@ -17,26 +16,54 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
-    - ./requirements.txt:/requirements.txt
-  depends_on: []
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - unear-network
 
 services:
   airflow-init:
     <<: *airflow-common
-    command: bash -c "airflow db init && airflow db upgrade && airflow users create \
-      --username admin --password admin --firstname Admin --lastname User \
-      --role Admin --email admin@example.com"
+    user: root
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init && \
+        airflow db upgrade && \
+        airflow users create \
+          --username admin --password admin --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+    restart: "no"
 
   airflow-webserver:
     <<: *airflow-common
-    command: bash -c "pip install -r /requirements.txt && airflow webserver"
+    command: airflow webserver
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_WEBSERVER_PORT:-8083}:8080"
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   airflow-scheduler:
     <<: *airflow-common
-    command: bash -c "pip install -r /requirements.txt && airflow scheduler"
+    command: airflow scheduler
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  unear-network:
+    external: true
+    name: unear_unear-network
