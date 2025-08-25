@@ -14,12 +14,6 @@ import os
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path)
 
-print("DB_HOST:", os.environ.get("DB_HOST"))
-print("DB_PORT:", os.environ.get("DB_PORT"))
-print("DB_NAME:", os.environ.get("DB_NAME"))
-print("DB_USERNAME:", os.environ.get("DB_USERNAME"))
-print("DB_PASSWORD:", os.environ.get("DB_PASSWORD"))
-
 def extract_list_or_single(value):
     if isinstance(value, list):
         return value
@@ -324,6 +318,8 @@ default_args = {
 
 from pendulum import datetime, timezone
 kst = timezone("Asia/Seoul")
+import time
+import logging
 
 # DAG 정의
 with DAG(
@@ -332,7 +328,6 @@ with DAG(
     schedule='0 2 * * *',  # 매일 새벽 2시
     start_date=datetime(2025, 1, 1, tz=kst),
     catchup=False,
-    params={} 
 ) as dag:
 
     start_time = time.perf_counter()
