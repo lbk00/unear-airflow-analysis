@@ -23,89 +23,108 @@ def extract_list_or_single(value):
 
 # 사용자 행동 기반 집계
 def summarize_user_actions():
+    from psycopg2.extras import execute_values
     try:
-        import json
-        from collections import defaultdict
         from datetime import date
-        import psycopg2
-
-        # summary_date = date.today() - timedelta(days=1)
+        
         summary_date = date.today()
 
+        # 집계 로직을 SQL 쿼리 하나로 통합
+        aggregation_query = """
+        WITH 
+        -- 집계 1: 연령대/성별에 따른 인기 검색어
+        keyword_summary AS (
+            SELECT
+                'AGE_GENDER_KEYWORD' AS action_type,
+                ((metadata::json ->> 'ageGroup') || '_' || (metadata::json ->> 'gender')) AS group_by_field,
+                LOWER(TRIM(metadata::json ->> 'keyword')) AS group_by_text,
+                COUNT(DISTINCT user_id) AS distinct_user_count,
+                COUNT(*) AS count
+            FROM
+                user_action_logs
+            WHERE
+                create_at::date = %(summary_date)s AND metadata IS NOT NULL
+                AND action_type IN ('PLACE_KEYWORD', 'BENEFIT_KEYWORD')
+                AND metadata::json ->> 'keyword' IS NOT NULL
+            GROUP BY
+                group_by_field, group_by_text
+        ),
+
+        -- 집계 2: 연령대/성별에 따른 관심 카테고리
+        category_summary AS (
+            SELECT
+                'AGE_GENDER_CATEGORY' AS action_type,
+                ((metadata::json ->> 'ageGroup') || '_' || (metadata::json ->> 'gender')) AS group_by_field,
+                LOWER(TRIM(json_array_elements_text(metadata::json -> 'category'))) AS group_by_text,
+                COUNT(DISTINCT user_id) AS distinct_user_count,
+                COUNT(*) AS count
+            FROM
+                user_action_logs
+            WHERE
+                create_at::date = %(summary_date)s AND metadata IS NOT NULL
+                AND action_type IN ('BENEFIT_DETAIL', 'VIEW_PLACE_DETAIL', 'PLACE_FILTER', 'FAVORITE_ON')
+                AND json_typeof(metadata::json -> 'category') = 'array'
+            GROUP BY
+                group_by_field, group_by_text
+        ),
+
+        -- 집계 3: 시간대별 성별/연령대 활성도
+        activity_summary AS (
+            SELECT
+                'AGE_GENDER_ACTIVATE_TIME' AS action_type,
+                ((metadata::json ->> 'ageGroup') || '_' || (metadata::json ->> 'gender')) AS group_by_field,
+                TO_CHAR(create_at, 'HH24') AS group_by_text,
+                COUNT(DISTINCT user_id) AS distinct_user_count,
+                COUNT(*) AS count
+            FROM
+                user_action_logs
+            WHERE
+                create_at::date = %(summary_date)s AND metadata IS NOT NULL
+            GROUP BY
+                group_by_field, group_by_text
+        )
+
+        -- 집계 결과 통합
+        SELECT action_type, group_by_field, group_by_text, distinct_user_count, count FROM keyword_summary
+        UNION ALL
+        SELECT action_type, group_by_field, group_by_text, distinct_user_count, count FROM category_summary
+        UNION ALL
+        SELECT action_type, group_by_field, group_by_text, distinct_user_count, count FROM activity_summary;
+        """
+
         with psycopg2.connect(
-            host=os.getenv("postgres-container"),
-            port=os.getenv("5432"),
-            dbname=os.getenv("unear"),
-            user=os.getenv("unear"),
-            password=os.getenv("1234")
+            host="localhost",
+            port="5432",
+            dbname="unear",
+            user="unear", 
+            password="1234"
         ) as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT user_id, action_type, screen, metadata, create_at
-                    FROM user_action_logs
-                    WHERE create_at::date = %s
-                """, (summary_date,))
+                # 쿼리 한 번만 실행
+                cursor.execute(aggregation_query, {'summary_date': summary_date})
                 rows = cursor.fetchall()
 
-                summary = defaultdict(lambda: {"user_set": set(), "count": 0})
+                if not rows:
+                    return
 
-                for user_id, action_type, screen, metadata ,create_at in rows:
-                    if not metadata:
-                        continue
-                    try:
-                        metadata_dict = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        continue
-
-                    gender = metadata_dict.get('gender')
-                    age_group = metadata_dict.get('ageGroup')
-
-                    # 1. 연령대/성별에따른 인기 검색어
-                    if action_type in {"PLACE_KEYWORD", "BENEFIT_KEYWORD"}:
-                        keyword = metadata_dict.get("keyword")
-                        if keyword and keyword.strip():
-                            normalized_keyword = keyword.strip().lower()
-                            if gender and age_group:
-                                key2 = ("AGE_GENDER_KEYWORD", f"{age_group}_{gender}", normalized_keyword)
-                                summary[key2]["user_set"].add(user_id)
-                                summary[key2]["count"] += 1
-
-                    # 2. 연령대/성별에 따른 관심 카테고리
-                    if action_type in ('BENEFIT_DETAIL', 'VIEW_PLACE_DETAIL', 'PLACE_FILTER', 'FAVORITE_ON'):
-                        categories = extract_list_or_single(metadata_dict.get('category'))
-                        for category in categories:
-                            if gender and age_group and category:
-                                key = ('AGE_GENDER_CATEGORY', f"{age_group}_{gender}", category.strip().lower())
-                                summary[key]["user_set"].add(user_id)
-                                summary[key]["count"] += 1
-
-                    # 3. 시간대별 성별/연령대 활성도
-                    if gender and age_group and create_at:
-                        hour_str = create_at.strftime("%H")
-                        group = f"{age_group}_{gender}"
-                        key = ('AGE_GENDER_ACTIVATE_TIME', group, hour_str)
-                        summary[key]["user_set"].add(user_id)
-                        summary[key]["count"] += 1
-
-                # 4. Insert 또는 Update
-                for (action_type, group_by_field, group_by_text), data in summary.items():
-                    distinct_user_count = len(data["user_set"])
-                    count = data["count"]
-
-                    cursor.execute("""
+                # 벌크 인서트: 조회된 결과를 한 번에 적재
+                values_to_insert = [row + (summary_date,) for row in rows]
+                
+                execute_values(
+                    cursor,
+                    """
                         INSERT INTO user_action_summary (
                             action_type, group_by_field, group_by_text,
                             distinct_user_count, count, summary_date
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        VALUES %s
                         ON CONFLICT (action_type, group_by_field, group_by_text, summary_date)
                         DO UPDATE SET
                             distinct_user_count = EXCLUDED.distinct_user_count,
                             count = EXCLUDED.count
-                    """, (
-                        action_type, group_by_field, group_by_text,
-                        distinct_user_count, count, summary_date
-                    ))
+                    """,
+                    values_to_insert
+                )
 
             conn.commit()
 
@@ -124,11 +143,11 @@ def summarize_event_actions():
         summary_date = date.today()
 
         with psycopg2.connect(
-            host=os.getenv("postgres-container"),
-            port=os.getenv("5432"),
-            dbname=os.getenv("unear"),
-            user=os.getenv("unear"),
-            password=os.getenv("1234")
+            host="localhost",  # 또는 "127.0.0.1"
+            port="5432",
+            dbname="unear",
+            user="unear", 
+            password="1234"
         ) as conn:
             with conn.cursor() as cursor:
 
@@ -208,11 +227,11 @@ def summarize_event_place_popularity():
         summary_date = date.today()
 
         with psycopg2.connect(
-            host=os.getenv("postgres-container"),
-            port=os.getenv("5432"),
-            dbname=os.getenv("unear"),
-            user=os.getenv("unear"),
-            password=os.getenv("1234")
+            host="localhost",  # 또는 "127.0.0.1"
+            port="5432",
+            dbname="unear",
+            user="unear", 
+            password="1234"
         ) as conn:
             with conn.cursor() as cursor:
 
