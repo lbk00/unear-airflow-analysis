@@ -331,7 +331,8 @@ with DAG(
     default_args=default_args,
     schedule='0 2 * * *',  # 매일 새벽 2시
     start_date=datetime(2025, 1, 1, tz=kst),
-    catchup=False
+    catchup=False,
+    params={} 
 ) as dag:
 
     start_time = time.perf_counter()
