@@ -14,11 +14,11 @@ import os
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path)
 
-logging.info("DB_HOST: %s", os.environ.get("DB_HOST"))
-logging.info("DB_PORT: %s", os.environ.get("DB_PORT"))
-logging.info("DB_NAME: %s", os.environ.get("DB_NAME"))
-logging.info("DB_USERNAME: %s", os.environ.get("DB_USERNAME"))
-logging.info("DB_PASSWORD: %s", os.environ.get("DB_PASSWORD"))
+print("DB_HOST:", os.environ.get("DB_HOST"))
+print("DB_PORT:", os.environ.get("DB_PORT"))
+print("DB_NAME:", os.environ.get("DB_NAME"))
+print("DB_USERNAME:", os.environ.get("DB_USERNAME"))
+print("DB_PASSWORD:", os.environ.get("DB_PASSWORD"))
 
 def extract_list_or_single(value):
     if isinstance(value, list):
@@ -334,11 +334,15 @@ with DAG(
     catchup=False
 ) as dag:
 
-    # Task 1: 유저 로그 요약
+    start_time = time.perf_counter()
+    logging.info("[START] summarize_user_actions")
+    # Task 1: 유저 로그 요약    
     summarize_user_logs_task = PythonOperator(
         task_id='summarize_user_logs',
         python_callable=summarize_user_actions
     )
+    end_time = time.perf_counter()
+    logging.info(f"[END] summarize_user_actions finished in {end_time - start_time:.2f} seconds")
 
     # Task 2: 이벤트 참여 요약
     summarize_event_actions_task = PythonOperator(
@@ -360,21 +364,22 @@ with DAG(
 # 수정 후
 if __name__ == "__main__":
     import time
+    import logging
 
     start_time = time.perf_counter()
-    print("\n[START] summarize_user_actions")
+    logging.info("[START] summarize_user_actions")
     summarize_user_actions()
     end_time = time.perf_counter()
-    print(f"[END] summarize_user_actions finished in {end_time - start_time:.2f} seconds.\n")
+    logging.info(f"[END] summarize_user_actions finished in {end_time - start_time:.2f} seconds")
 
     start_time = time.perf_counter()
-    print("[START] summarize_event_actions")
+    logging.info("[START] summarize_event_actions")
     summarize_event_actions()
     end_time = time.perf_counter()
-    print(f"[END] summarize_event_actions finished in {end_time - start_time:.2f} seconds.\n")
+    logging.info(f"[END] summarize_event_actions finished in {end_time - start_time:.2f} seconds")
 
     start_time = time.perf_counter()
-    print("[START] summarize_event_place_popularity")
+    logging.info("[START] summarize_event_place_popularity")
     summarize_event_place_popularity()
     end_time = time.perf_counter()
-    print(f"[END] summarize_event_place_popularity finished in {end_time - start_time:.2f} seconds.\n")
+    logging.info(f"[END] summarize_event_place_popularity finished in {end_time - start_time:.2f} seconds")
