@@ -37,7 +37,7 @@ def summarize_user_actions():
             host=os.getenv("DB_HOST"),
             port=os.getenv("DB_PORT"),
             dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
+            user=os.getenv("DB_USERNAME"),
             password=os.getenv("DB_PASSWORD")
         ) as conn:
             with conn.cursor() as cursor:
