@@ -14,11 +14,11 @@ import os
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path)
 
-print("DB_HOST:", os.environ.get("DB_HOST"))
-print("DB_PORT:", os.environ.get("DB_PORT"))
-print("DB_NAME:", os.environ.get("DB_NAME"))
-print("DB_USERNAME:", os.environ.get("DB_USERNAME"))
-print("DB_PASSWORD:", os.environ.get("DB_PASSWORD"))
+logging.info("DB_HOST: %s", os.environ.get("DB_HOST"))
+logging.info("DB_PORT: %s", os.environ.get("DB_PORT"))
+logging.info("DB_NAME: %s", os.environ.get("DB_NAME"))
+logging.info("DB_USERNAME: %s", os.environ.get("DB_USERNAME"))
+logging.info("DB_PASSWORD: %s", os.environ.get("DB_PASSWORD"))
 
 def extract_list_or_single(value):
     if isinstance(value, list):
