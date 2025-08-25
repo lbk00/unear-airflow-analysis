@@ -128,7 +128,7 @@ def summarize_event_actions():
             host=os.getenv("DB_HOST"),
             port=os.getenv("DB_PORT"),
             dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
+            user=os.getenv("DB_USERNAME"),
             password=os.getenv("DB_PASSWORD")
         ) as conn:
             with conn.cursor() as cursor:
@@ -212,7 +212,7 @@ def summarize_event_place_popularity():
             host=os.getenv("DB_HOST"),
             port=os.getenv("DB_PORT"),
             dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
+            user=os.getenv("DB_USERNAME"),
             password=os.getenv("DB_PASSWORD")
         ) as conn:
             with conn.cursor() as cursor:
@@ -352,7 +352,24 @@ with DAG(
 
 
 #로컬 테스트용
+# 수정 후
 if __name__ == "__main__":
+    import time
+
+    start_time = time.perf_counter()
+    print("\n[START] summarize_user_actions")
     summarize_user_actions()
+    end_time = time.perf_counter()
+    print(f"[END] summarize_user_actions finished in {end_time - start_time:.2f} seconds.\n")
+
+    start_time = time.perf_counter()
+    print("[START] summarize_event_actions")
     summarize_event_actions()
+    end_time = time.perf_counter()
+    print(f"[END] summarize_event_actions finished in {end_time - start_time:.2f} seconds.\n")
+
+    start_time = time.perf_counter()
+    print("[START] summarize_event_place_popularity")
     summarize_event_place_popularity()
+    end_time = time.perf_counter()
+    print(f"[END] summarize_event_place_popularity finished in {end_time - start_time:.2f} seconds.\n")
