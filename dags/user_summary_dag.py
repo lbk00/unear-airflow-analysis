@@ -30,7 +30,8 @@ def summarize_user_actions():
         from datetime import date
         import psycopg2
 
-        summary_date = date.today() - timedelta(days=1)
+        # summary_date = date.today() - timedelta(days=1)
+        summary_date = date.today()
 
         with psycopg2.connect(
             host=os.getenv("DB_HOST"),
@@ -121,7 +122,7 @@ def summarize_event_actions():
     from datetime import date
 
     try:
-        summary_date = date.today() - timedelta(days=1)
+        summary_date = date.today()
 
         with psycopg2.connect(
             host=os.getenv("DB_HOST"),
@@ -205,7 +206,7 @@ def summarize_event_place_popularity():
     import math
 
     try:
-        summary_date = date.today() - timedelta(days=1)
+        summary_date = date.today()
 
         with psycopg2.connect(
             host=os.getenv("DB_HOST"),

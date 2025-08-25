@@ -18,3 +18,5 @@ logs/
 
 application-secret.yml
 application-local.yml
+
+/dummy
